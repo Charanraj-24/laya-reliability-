@@ -21,6 +21,8 @@ If the answer changes just because the options were reordered or renamed, that's
 
 I use this to calculate a **soft stability** score for each answer.
 
+In my tests, soft stability helps the most exactly where `answer_confidence` is weakest: harder, informal language and questions with many options. When confidence already works well (for example with only 6 options), the improvement is small.
+
 The important part is that this doesn't modify Laya or replace its original prediction. It wraps around Laya and adds reliability information to the result.
 
 ## Results
@@ -34,17 +36,20 @@ Tested with:
 
 AUROC is used to measure how well each score separates correct answers from incorrect ones. `0.5` is basically random and `1.0` is perfect separation.
 
-| | MASSIVE `en` (300 cases, 20 options) | Hand-written held-out set (280 cases) |
-|---|---|---|
-| AUROC `answer_confidence` | 0.831 | 0.647 |
-| AUROC soft stability | **0.907** | **0.714** |
-| Difference, bootstrap 95% interval | +0.076 (+0.035 to +0.123) | +0.068 (+0.031 to +0.111)* |
+| | Hand-written held-out set (280 cases) | MASSIVE `en`, 20 options (300 cases) | MASSIVE `en`, 6 options (300 cases) |
+|---|---|---|---|
+| AUROC `answer_confidence` | 0.647 | 0.831 | 0.913 |
+| AUROC soft stability | **0.714** | **0.907** | 0.949 |
+| Difference, bootstrap 95% interval | +0.068 (+0.031 to +0.111)* | +0.076 (+0.035 to +0.123) | +0.036 (−0.002 to +0.073) |
+| Wrong answers in the set | 88 | 65 | 30 |
 
 \*The held-out difference is from an earlier run of the same method with different shuffles (AUROC 0.715).
 
+The pattern here is that the gain is largest where `answer_confidence` is weakest. With 6 options, Laya was right 90% of the time and its confidence already did a good job. Stability still came out ahead, but with only 30 wrong answers the difference isn't significant.
+
 ### MASSIVE results at different coverage levels
 
-This shows what happens if Laya only handles the cases it trusts the most.
+This shows what happens if Laya only handles the cases it trusts the most (20 options).
 
 | Cases Laya handles | Ranked by `answer_confidence` | Ranked by soft stability |
 |---|---|---|
@@ -60,7 +65,26 @@ A few other things I found:
 - MASSIVE examples are generated using Laya's own `research/eval/laya_eval.py` harness.
 - Accuracy on the first 100 MASSIVE cases was `0.820`, which matches Laya's published `0.82`.
 - Laya's original answers are not changed. The original predictions were identical to plain `predict`; this module only adds a `reliability` field.
-- Renaming choices to A/B/C gave a stronger signal than just reordering them. On the held-out set, plain stability AUROC was `0.703` for renaming compared with `0.611` for reordering. This result is exploratory.
+- Renaming choices to A/B/C gives a stronger signal than just reordering them. On MASSIVE with 20 options, the renamed variants alone (without Laya's original answer) reached `0.889` AUROC, +0.059 over `answer_confidence` (+0.012 to +0.110). The reordered variants alone reached `0.862`, +0.031 (−0.006 to +0.072), which isn't significant on its own.
+
+### Is the rename gain just from truncated options?
+
+Laya has a token budget for the options (`head_max_len=192`). When all the options together don't fit, each one gets cut short. With a lot of options, renaming can end up removing most of an option's text ([#543](https://github.com/NandhaKishorM/laya/issues/543) shows this at 58 options), so I wanted to check whether that was behind my results.
+
+I measured it with Laya's own tokenizer, using the same logic as `build_sequence`:
+
+| MASSIVE `en`, 20 options | Truncated in | Tokens needed per option | Tokens kept |
+|---|---|---|---|
+| Original (`key: description`) | 68.7% of cases | 9.0 | 7.9 |
+| Renamed (`A: description`) | 0% | 5.8 | 5.8 |
+
+At 20 options it's actually the other way round: the renamed options always fit, and it's the original ones that get trimmed a little.
+
+I also looked at only the 94 cases where nothing was truncated at all. Soft stability still came out ahead there (`0.895` vs `0.726`), although that's only 17 wrong answers.
+
+At 6 options nothing gets truncated in either version.
+
+With very large option sets (like the 58 options in #543), renaming really does destroy option text, so I'd only use the rename variants when the options fit the budget.
 
 ## How it works
 
@@ -184,6 +208,8 @@ agent.predict_batch(states, questions)
 
 It works like Laya's normal `predict_batch`.
 
+I checked it against single `predict` on 146 cases that share one question: the batched version gave exactly the same answers, decisions and stability scores, and the same answers as plain Laya.
+
 ## Calibration
 
 The ACCEPT and ESCALATE thresholds should be calibrated for the dataset you're actually using.
@@ -202,12 +228,23 @@ These measurements were done on CPU.
 
 | Setting | Rows per question | Time vs plain `predict` |
 |---|---|---|
-| `full` (default) | up to 8 | 5.1–5.5× |
+| `full` (default) | up to 8 | 5.1–6.5× |
 | `fast` | 3 | 2.4× |
 
-On MASSIVE with 20 options, `full` took around **6.0 seconds per case**.
+On MASSIVE, `full` took around **5.6–6.0 seconds per case** with 20 options and **2.4 seconds** with 6.
 
-I haven't measured GPU performance yet. Since the additional variants are separate rows in the same forward pass, some of the extra work may parallelize better on a GPU.
+I also tried the batch path to see if it would bring the cost down (146 cases, one shared 6-option question, batch size 16):
+
+| Per case | Time |
+|---|---|
+| Plain `predict` | 394 ms |
+| Plain `predict_batch` | 327 ms |
+| Reliable, single | 2,552 ms |
+| Reliable, batched | 2,669 ms |
+
+On CPU, batching doesn't help. The cost just scales with the number of rows, so the batched version is still about 8× plain `predict_batch`.
+
+I haven't measured GPU performance yet. Since the additional variants are separate rows, they should parallelize much better on a GPU.
 
 ## What this doesn't catch
 
@@ -255,8 +292,9 @@ Examples included inputs like:
 There are a few limitations to keep in mind when looking at these results.
 
 - The two hand-written datasets were written and labelled by me specifically to test Laya's weak spots. They're intentionally harder than normal examples, so their raw accuracy shouldn't be treated as a general Laya benchmark.
-- The MASSIVE experiment currently covers one language (English), one checkpoint and 300 cases.
-- MASSIVE has 20 choices per question. Laya's `choice:11+` temperature clamp therefore affects those experiments, while the hand-written datasets only contain 2–6 choices.
+- The MASSIVE experiments currently cover one language (English), one checkpoint and 300 cases per option count.
+- With 20 choices per question, Laya's `choice:11+` temperature clamp affects the 20-option MASSIVE runs, while the 6-option run and the hand-written datasets (2–6 choices) aren't affected.
+- The rename variants shouldn't be used on very large option sets where the options get truncated (see [#543](https://github.com/NandhaKishorM/laya/issues/543)).
 - `calibrate()` had a bug in its first version where the ESCALATE cutoff was placed at the ACCEPT cutoff, which meant there was no VERIFY range. The fix was chosen using the development set only.
 
 ## Reproducing the results
@@ -288,13 +326,20 @@ python evaluate_reliability.py \
     --calibrate-on laya_tests.json
 ```
 
-Run the MASSIVE benchmark:
+Run the MASSIVE benchmark with 20 and 6 options:
 
 ```bash
 python run_massive.py --repo path/to/laya --n 300
+python run_massive.py --repo path/to/laya --n 300 --options 6
 ```
 
 This requires a local checkout of the Laya repository.
+
+Check the batch path and time it:
+
+```bash
+python run_batch_check.py
+```
 
 ## Repository files
 
@@ -303,7 +348,8 @@ This requires a local checkout of the Laya repository.
 | `reliability.py` | Main reliability wrapper, variants, soft stability, decisions and `calibrate()` |
 | `test_reliability.py` | Unit tests using fake agents; doesn't require downloading the model |
 | `evaluate_reliability.py` | Evaluates a test set and reports AUROC, decisions and speed |
-| `run_massive.py` | Runs the reliability layer against Laya's MASSIVE benchmark using Laya's own harness |
+| `run_massive.py` | Runs the reliability layer against Laya's MASSIVE benchmark using Laya's own harness, splits the results by reorder vs rename and measures option truncation |
+| `run_batch_check.py` | Checks the batch path against single `predict` and compares the speed |
 | `run_benchmark.py` | Original baseline experiments |
 | `run_stability.py` | Original stability experiments |
 | `laya_tests.json` | Development set with 111 hand-written cases |
@@ -313,8 +359,10 @@ This requires a local checkout of the Laya repository.
 ## Related Laya issues
 
 - [#361](https://github.com/NandhaKishorM/laya/issues/361) - confidence-based abstention using `min_confidence`. Stability could be used as an additional signal.
-- [#394](https://github.com/NandhaKishorM/laya/issues/394) - confidence thresholds have trouble separating correct and incorrect answers when there are 20 options. I reproduced this on 300 MASSIVE cases.
+- [#394](https://github.com/NandhaKishorM/laya/issues/394) - confidence thresholds have trouble separating correct and incorrect answers when there are 20 options. On 300 MASSIVE cases, 37 of the 65 wrong answers had `answer_confidence >= 0.90`.
+- [#543](https://github.com/NandhaKishorM/laya/issues/543) - option text gets truncated when there are many options, which is why a rename isn't a fair test on very large option sets.
 - [#244](https://github.com/NandhaKishorM/laya/issues/244) - Laya's existing option-order invariance test in `research/eval/metamorphic.py`. That implementation tests option reordering but leaves label renaming for future work.
+- [#517](https://github.com/NandhaKishorM/laya/pull/517) - adds label renaming to `metamorphic.py`.
 
 ## License
 
