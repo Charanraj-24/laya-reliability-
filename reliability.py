@@ -206,6 +206,7 @@ def _unpack(raw: Dict[str, Any], questions, plan, accept, escalate) -> Dict[str,
                 "n_variants": len(seen),
                 "distinct_choices": sorted({c for _, c, _ in seen}),
                 "variant_choices": {name: c for name, c, _ in seen},
+                "variant_support": {name: round(p.get(choice, 0.0), 4) for name, _, p in seen},
             }
         answers_out[qid] = ans
     out = {k: v for k, v in raw.items() if k != "answers"}
@@ -220,10 +221,12 @@ def _seed_of(state: Any) -> str:
 def predict_reliable(agent, state, questions: Dict[str, Dict[str, Any]], *,
                      n_shuffles: int = 3, relabel: bool = True, variants="full",
                      accept: float = DEFAULT_ACCEPT, escalate: float = DEFAULT_ESCALATE,
-                     **predict_kwargs) -> Dict[str, Any]:
+                     seed: Optional[str] = None, **predict_kwargs) -> Dict[str, Any]:
     """Like `agent.predict(state, questions)`, plus a `reliability` entry on each
-    choice answer. Uses a single predict call."""
-    packed, plan = _pack(questions, n_shuffles, relabel, _seed_of(state), _resolve_variants(variants))
+    choice answer. Uses a single predict call. Shuffles are seeded from the state
+    unless `seed` is given (pass seed="batch" to match predict_reliable_batch)."""
+    packed, plan = _pack(questions, n_shuffles, relabel, seed if seed is not None else _seed_of(state),
+                         _resolve_variants(variants))
     raw = agent.predict(state, packed, **predict_kwargs)
     return _unpack(raw, questions, plan, accept, escalate)
 
