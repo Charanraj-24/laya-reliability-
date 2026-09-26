@@ -1,0 +1,13 @@
+==================================================================
+Batch path check: 146 cases, batch size 16, device cpu
+==================================================================
+Correctness:
+  plain batch vs single, same answer:        146/146  (max answer_confidence diff 1.00e-04)  OK
+  reliable batch vs single, same answer and decision: 146/146  (max soft_stability diff 0.00e+00)  OK
+  reliable batch answer == plain answer:     146/146  OK
+
+Time per case:
+  plain, single predict         394 ms
+  plain, predict_batch          327 ms
+  reliable, single             2552 ms   (6.5x plain single)
+  reliable, batched            2669 ms   (6.8x plain single, 8.2x plain batched)

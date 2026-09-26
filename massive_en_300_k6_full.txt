@@ -1,0 +1,33 @@
+======================================================================
+MASSIVE intent (en), 300 cases, 6 options, variants=full, head_max_len=192
+======================================================================
+Accuracy, all 300 cases:   0.900
+
+Option text vs head budget (mean tokens per option):
+  original  truncated in   0.0% of cases; needs  9.1, keeps  9.1
+  renamed   truncated in   0.0% of cases; needs  5.8, keeps  5.8
+
+AUROC (right vs wrong; 0.5 = useless). Subsets exclude the original question:
+  answer_confidence                      0.913
+  soft stability, all (incl. original)   0.949
+  soft stability, reorder only           0.926
+  soft stability, rename only            0.939
+  plain stability, all                   0.882
+  plain stability, reorder only          0.791
+  plain stability, rename only           0.820
+
+Difference vs answer_confidence, bootstrap 95% interval:
+  soft_stability   +0.036  (-0.002 to +0.073)
+  soft_reorder     +0.012  (-0.018 to +0.043)
+  soft_rename      +0.026  (-0.027 to +0.077)
+
+How often variants changed the answer:
+  reorder flip rate: right answers 0.029, wrong answers 0.386
+  rename flip rate: right answers 0.041, wrong answers 0.478
+
+Cutoffs fitted on cases 1-150: ACCEPT >= 0.15, ESCALATE < 0.00; applied to cases 151-300:
+  ACCEPT    149 cases  accuracy 87.9%
+  VERIFY      1 cases  accuracy 100.0%
+  ESCALATE    0 cases
+
+Time: 2.4 s/case
