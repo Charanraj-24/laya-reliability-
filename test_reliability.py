@@ -158,3 +158,18 @@ def test_calibrate_keeps_a_verify_band():
     assert escalate < accept
     below = [c for s, c in zip(scores, correct) if s < escalate]
     assert not below or sum(below) / len(below) <= 1 / 3
+
+
+def test_variant_support_matches_soft_stability():
+    r = predict_reliable(FirstOptionAgent(), "hi", Q)["answers"]["tone"]["reliability"]
+    support = r["variant_support"]
+    assert set(support) == set(r["variant_choices"])
+    assert abs(sum(support.values()) / len(support) - r["soft_stability"]) < 1e-3
+
+
+def test_single_with_batch_seed_matches_batch():
+    agent = FirstOptionAgent()
+    single = [predict_reliable(agent, s, Q, seed="batch") for s in ("a", "b")]
+    batch = predict_reliable_batch(agent, ["a", "b"], Q)
+    for x, y in zip(single, batch):
+        assert x["answers"]["tone"]["reliability"] == y["answers"]["tone"]["reliability"]
